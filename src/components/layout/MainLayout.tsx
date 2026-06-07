@@ -2,7 +2,7 @@ import { Link, useLocation } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import {
-  Users, FileText, BookOpen, BarChart3, Menu, X, LogOut,
+  Users, BarChart3, Menu, X, LogOut,
   ChevronRight, Home, RotateCcw, CheckCircle, Clock, Briefcase,
   TrendingUp, KeyRound,
 } from "lucide-react";
@@ -18,8 +18,6 @@ const menuItems = [
   { path: "/", label: "首页", icon: Home, roles: ["super_admin", "contract_admin", "project_manager"] },
   { path: "/users", label: "用户", icon: Users, roles: ["super_admin"] },
   { path: "/projects", label: "项目", icon: TrendingUp, roles: ["super_admin"] },
-  { path: "/templates", label: "模板", icon: BookOpen, roles: ["super_admin", "contract_admin"] },
-  { path: "/contracts", label: "合同", icon: FileText, roles: ["super_admin", "contract_admin"] },
   { path: "/budgets", label: "预算", icon: BarChart3, roles: ["super_admin"] },
   { path: "/quality", label: "质量", icon: CheckCircle, roles: ["super_admin", "project_manager"] },
   { path: "/idle-logs", label: "窝工", icon: Clock, roles: ["super_admin", "project_manager"] },

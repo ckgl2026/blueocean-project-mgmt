@@ -4,9 +4,6 @@ import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import UserManagement from "./pages/admin/UserManagement";
 import ProjectManagement from "./pages/admin/ProjectManagement";
-import TemplateManagement from "./pages/contract/TemplateManagement";
-import ContractManagement from "./pages/contract/ContractManagement";
-import ContractForm from "./pages/contract/ContractForm";
 import BudgetManagement from "./pages/admin/BudgetManagement";
 import QualityRecords from "./pages/project/QualityRecords";
 import IdleLogs from "./pages/project/IdleLogs";
@@ -21,10 +18,6 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/users" element={<UserManagement />} />
         <Route path="/projects" element={<ProjectManagement />} />
-        <Route path="/templates" element={<TemplateManagement />} />
-        <Route path="/contracts" element={<ContractManagement />} />
-        <Route path="/contracts/new" element={<ContractForm />} />
-        <Route path="/contracts/edit/:id" element={<ContractForm />} />
         <Route path="/budgets" element={<BudgetManagement />} />
         <Route path="/quality" element={<QualityRecords />} />
         <Route path="/idle-logs" element={<IdleLogs />} />
@@ -35,6 +28,3 @@ export default function App() {
     </>
   );
 }
-// v1780817340
-// force rebuild 1780817395
-export const VERSION = 'v2-' + Date.now();

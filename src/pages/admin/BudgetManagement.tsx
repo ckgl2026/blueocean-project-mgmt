@@ -34,14 +34,12 @@ export default function BudgetManagement() {
   const utils = trpc.useUtils();
 
   const { data: budgets = [] } = trpc.budget.list.useQuery({ search: search || undefined });
-  const { data: contracts = [] } = trpc.contract.list.useQuery();
+  const { data: projects = [] } = trpc.project.list.useQuery();
   const { data: viewBudget } = trpc.budget.getById.useQuery({ id: viewingId! }, { enabled: !!viewingId });
 
   const createMut = trpc.budget.create.useMutation({
     onSuccess: () => { utils.budget.list.invalidate(); toast.success("预算创建成功"); setDialogOpen(false); resetForm(); }
   });
-
-  const executingContracts = contracts.filter((c: { status: string }) => c.status === "executing");
 
   const [form, setForm] = useState({
     projectName: "", contractId: 0,
@@ -75,7 +73,7 @@ export default function BudgetManagement() {
   const removeMaterial = (i: number) => setForm(p => ({ ...p, part1Materials: p.part1Materials.filter((_, idx) => idx !== i) }));
 
   const handleSubmit = () => {
-    if (!form.contractId) { toast.error("请选择合同"); return; }
+    if (!form.projectName) { toast.error("请输入项目名称"); return; }
     const totalMaterial = form.part1Materials.reduce((s, m) => s + m.amount, 0);
     const totalLabor = Object.values(form.part2Labor).reduce((s, v) => s + v, 0);
     const totalOther = Object.values(form.part3Other).reduce((s, v) => s + v, 0);
@@ -154,16 +152,16 @@ export default function BudgetManagement() {
     <MainLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div><h1 className="text-2xl font-bold text-gray-900">项目预算管理</h1><p className="text-gray-500 mt-1">根据执行状态的合同生成项目预算表</p></div>
+          <div><h1 className="text-2xl font-bold text-gray-900">项目预算管理</h1><p className="text-gray-500 mt-1">管理项目预算和材料清单</p></div>
           <Button className="bg-[#1e3a5f] hover:bg-[#2a4a6f]" onClick={() => { resetForm(); setDialogOpen(true); }}><Plus className="w-4 h-4 mr-2" />新增预算</Button>
         </div>
         <div className="relative max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" /><Input className="pl-10" placeholder="搜索项目名称..." value={search} onChange={(e) => setSearch(e.target.value)} /></div>
         <div className="bg-white rounded-lg border">
           <Table>
-            <TableHeader><TableRow><TableHead>预算编号</TableHead><TableHead>项目名称</TableHead><TableHead>关联合同</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>预算编号</TableHead><TableHead>项目名称</TableHead><TableHead>合同名称</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
             <TableBody>
               {budgets.length === 0 ? <TableRow><TableCell colSpan={4} className="text-center py-8 text-gray-400">暂无预算数据</TableCell></TableRow> : budgets.map((b: { id: number; budgetNo: string; projectName: string; contractId: number }) => (
-                <TableRow key={b.id}><TableCell className="font-mono text-sm">{b.budgetNo}</TableCell><TableCell className="font-medium">{b.projectName}</TableCell><TableCell>#{b.contractId}</TableCell><TableCell className="text-right">
+                <TableRow key={b.id}><TableCell className="font-mono text-sm">{b.budgetNo}</TableCell><TableCell className="font-medium">{b.projectName}</TableCell><TableCell>{b.contractId ? '#' + b.contractId : '-'}</TableCell><TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
                     <Button variant="ghost" size="sm" onClick={() => { setViewingId(b.id); setViewDialogOpen(true); }}><Eye className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="sm" onClick={() => { setViewingId(b.id); setTimeout(exportToExcel, 100); }}><FileDown className="w-4 h-4" /></Button>
@@ -178,13 +176,13 @@ export default function BudgetManagement() {
             <DialogHeader><DialogTitle>新增项目预算</DialogTitle></DialogHeader>
             <div className="space-y-4 pt-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>选择合同</Label>
-                  <Select value={form.contractId?.toString() || ""} onValueChange={(v) => { const c = executingContracts.find((x: { id: number }) => x.id === Number(v)); setForm({ ...form, contractId: Number(v), projectName: c?.projectName || "" }); }}>
-                    <SelectTrigger><SelectValue placeholder="选择执行状态的合同" /></SelectTrigger>
-                    <SelectContent>{executingContracts.map((c: { id: number; contractNo: string; projectName: string }) => <SelectItem key={c.id} value={c.id.toString()}>{c.contractNo} - {c.projectName}</SelectItem>)}</SelectContent>
+                <div className="space-y-2"><Label>合同名称</Label><Input value={form.contractId ? String(form.contractId) : ""} onChange={(e) => setForm({ ...form, contractId: Number(e.target.value) || 0 })} placeholder="输入合同编号或名称" /></div>
+                <div className="space-y-2"><Label>项目名称</Label>
+                  <Select value={form.projectName} onValueChange={(v) => setForm({ ...form, projectName: v })}>
+                    <SelectTrigger><SelectValue placeholder="选择项目名称" /></SelectTrigger>
+                    <SelectContent>{projects.map((p: { id: number; name: string }) => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2"><Label>项目名称</Label><Input value={form.projectName} readOnly className="bg-gray-50" /></div>
               </div>
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="part1">一、材料清单</TabsTrigger><TabsTrigger value="part2">二、人工费用</TabsTrigger><TabsTrigger value="part3">三、其他费用</TabsTrigger></TabsList>
