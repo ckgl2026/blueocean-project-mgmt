@@ -159,6 +159,7 @@ export interface ReworkLedger {
 
 const STORAGE_KEYS = {
   users: "bo_users",
+  projects: "bo_projects",
   templates: "bo_templates",
   contracts: "bo_contracts",
   budgets: "bo_budgets",
@@ -345,6 +346,46 @@ export function deleteUser(id: number): void {
   setItem(
     STORAGE_KEYS.users,
     users.filter((u) => u.id !== id)
+  );
+}
+
+// ─── Project CRUD ────────────────────────────────────────
+
+export interface Project {
+  id: number;
+  name: string;
+  description: string;
+  status: "active" | "completed" | "archived";
+  createdBy: number;
+  createdAt: string;
+}
+
+export function getProjects(): Project[] {
+  return getItem<Project[]>(STORAGE_KEYS.projects, []);
+}
+
+export function createProject(data: Omit<Project, "id" | "createdAt">): Project {
+  const projects = getProjects();
+  const project: Project = { ...data, id: nextId(), createdAt: new Date().toISOString() };
+  setItem(STORAGE_KEYS.projects, [...projects, project]);
+  return project;
+}
+
+export function updateProject(id: number, data: Partial<Project>): Project {
+  const projects = getProjects();
+  const idx = projects.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error("项目不存在");
+  const updated = { ...projects[idx], ...data };
+  projects[idx] = updated;
+  setItem(STORAGE_KEYS.projects, projects);
+  return updated;
+}
+
+export function deleteProject(id: number): void {
+  const projects = getProjects();
+  setItem(
+    STORAGE_KEYS.projects,
+    projects.filter((p) => p.id !== id)
   );
 }
 
