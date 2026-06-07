@@ -1,58 +1,82 @@
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { trpc } from "@/providers/trpc";
-import { useCallback, useEffect, useMemo } from "react";
-import { useNavigate } from "react-router";
-import { LOGIN_PATH } from "@/const";
 
-type UseAuthOptions = {
-  redirectOnUnauthenticated?: boolean;
-  redirectPath?: string;
+export type AuthUser = {
+  id: number;
+  username: string;
+  name: string;
+  role: string;
 };
 
-export function useAuth(options?: UseAuthOptions) {
-  const { redirectOnUnauthenticated = false, redirectPath = LOGIN_PATH } =
-    options ?? {};
+export function useAuth() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const navigate = useNavigate();
-
-  const utils = trpc.useUtils();
-
-  const {
-    data: user,
-    isLoading,
-    error,
-    refetch,
-  } = trpc.auth.me.useQuery(undefined, {
-    staleTime: 1000 * 60 * 5,
+  const meQuery = trpc.localAuth.me.useQuery(undefined, {
     retry: false,
+    refetchOnWindowFocus: false,
   });
 
-  const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: async () => {
-      await utils.invalidate();
-      navigate(redirectPath);
+  useEffect(() => {
+    if (meQuery.isLoading) {
+      setIsLoading(true);
+    } else if (meQuery.data) {
+      setUser(meQuery.data as AuthUser);
+      setIsLoading(false);
+    } else {
+      setUser(null);
+      setIsLoading(false);
+    }
+  }, [meQuery.data, meQuery.isLoading]);
+
+  const loginMutation = trpc.localAuth.login.useMutation({
+    onSuccess: (data) => {
+      localStorage.setItem("blueocean_token", data.token);
+      setUser(data.user as AuthUser);
     },
   });
 
-  const logout = useCallback(() => logoutMutation.mutate(), [logoutMutation]);
+  const logoutMutation = trpc.localAuth.logout.useMutation({
+    onSuccess: () => {
+      localStorage.removeItem("blueocean_token");
+      setUser(null);
+      window.location.reload();
+    },
+    onError: () => {
+      // Even if server logout fails, clear local state
+      localStorage.removeItem("blueocean_token");
+      setUser(null);
+      window.location.reload();
+    },
+  });
 
-  useEffect(() => {
-    if (redirectOnUnauthenticated && !isLoading && !user) {
-      const currentPath = window.location.pathname;
-      if (currentPath !== redirectPath) {
-        navigate(redirectPath);
-      }
-    }
-  }, [redirectOnUnauthenticated, isLoading, user, navigate, redirectPath]);
+  const login = useCallback(
+    (username: string, password: string) => {
+      return loginMutation.mutateAsync({ username, password });
+    },
+    [loginMutation]
+  );
+
+  const logout = useCallback(() => {
+    logoutMutation.mutate();
+  }, [logoutMutation]);
+
+  const isAuthenticated = !!user;
+  const isSuperAdmin = user?.role === "super_admin";
+  const isContractAdmin = user?.role === "contract_admin" || isSuperAdmin;
+  const isProjectManager = user?.role === "project_manager" || isSuperAdmin;
 
   return useMemo(
     () => ({
-      user: user ?? null,
-      isAuthenticated: !!user,
-      isLoading: isLoading || logoutMutation.isPending,
-      error,
+      user,
+      isAuthenticated,
+      isLoading,
+      isSuperAdmin,
+      isContractAdmin,
+      isProjectManager,
+      login,
       logout,
-      refresh: refetch,
     }),
-    [user, isLoading, logoutMutation.isPending, error, logout, refetch],
+    [user, isAuthenticated, isLoading, isSuperAdmin, isContractAdmin, isProjectManager, login, logout]
   );
 }

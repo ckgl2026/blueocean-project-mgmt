@@ -13,6 +13,13 @@ const trpcClient = trpc.createClient({
     httpBatchLink({
       url: "/api/trpc",
       transformer: superjson,
+      headers() {
+        const token = localStorage.getItem("blueocean_token");
+        if (token) {
+          return { Authorization: `Bearer ${token}` };
+        }
+        return {};
+      },
       fetch(input, init) {
         return globalThis.fetch(input, {
           ...(init ?? {}),

@@ -73,3 +73,36 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Hide Kimi Agent floating button */
+a[href*="kimi.com/agent"],
+[data-testid="kimi-agent-button"],
+.kimi-agent-float,
+#kimi-agent-float {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Mobile responsive improvements */
+@media (max-width: 640px) {
+  html {
+    font-size: 14px;
+  }
+  .mobile-full {
+    width: 100% !important;
+  }
+}
+
+/* Table horizontal scroll on mobile */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Mobile bottom safe area - use fallback for compatibility */
+.pb-safe {
+  padding-bottom: 0px;
+  padding-bottom: env(safe-area-inset-bottom);
+}

@@ -102,10 +102,11 @@ export function createOAuthCallbackHandler() {
       }
 
       await upsertUser({
-        unionId: userId,
-        name: userProfile.name,
-        avatar: userProfile.avatar_url,
-        lastSignInAt: new Date(),
+        username: userId,
+        name: userProfile.name || "用户",
+        password: "",
+        role: "contract_admin",
+        status: "active",
       });
 
       const token = await signSessionToken({
