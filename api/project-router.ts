@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { eq, and, ilike } from "drizzle-orm";
 import { createRouter, adminQuery, anyRoleQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { projects } from "@db/schema";
-import { eq, like, and } from "drizzle-orm";
 
 export const projectRouter = createRouter({
   list: anyRoleQuery
@@ -11,7 +11,7 @@ export const projectRouter = createRouter({
       const db = getDb();
       const conditions = [];
       if (input?.search) {
-        conditions.push(like(projects.name, `%${input.search}%`));
+        conditions.push(ilike(projects.name, `%${input.search}%`));
       }
       if (input?.status) {
         conditions.push(eq(projects.status, input.status as "active" | "completed" | "archived"));
@@ -44,8 +44,8 @@ export const projectRouter = createRouter({
         description: input.description,
         status: input.status,
         createdBy: ctx.user!.id,
-      });
-      return { id: Number(result[0].insertId), success: true };
+      }).returning();
+      return { id: result[0].id, success: true };
     }),
 
   update: adminQuery

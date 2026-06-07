@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { createRouter, contractAdminQuery } from "./middleware";
+import { eq, ilike } from "drizzle-orm";
+import { createRouter, adminQuery, anyRoleQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { contractTemplates } from "@db/schema";
-import { eq, like } from "drizzle-orm";
 
 export const contractTemplateRouter = createRouter({
-  list: contractAdminQuery
+  list: anyRoleQuery
     .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ input }) => {
       const db = getDb();
@@ -13,72 +13,55 @@ export const contractTemplateRouter = createRouter({
         return db
           .select()
           .from(contractTemplates)
-          .where(like(contractTemplates.name, `%${input.search}%`));
+          .where(ilike(contractTemplates.name, `%${input.search}%`))
+          .orderBy(contractTemplates.createdAt);
       }
-      return db.select().from(contractTemplates);
+      return db.select().from(contractTemplates).orderBy(contractTemplates.createdAt);
     }),
 
-  getById: contractAdminQuery
-    .input(z.object({ id: z.number() }))
-    .query(async ({ input }) => {
-      const db = getDb();
-      const found = await db
-        .select()
-        .from(contractTemplates)
-        .where(eq(contractTemplates.id, input.id))
-        .limit(1);
-
-      if (found.length === 0) {
-        throw new Error("模板不存在");
-      }
-      return found[0];
-    }),
-
-  create: contractAdminQuery
+  create: adminQuery
     .input(
       z.object({
-        name: z.string().min(1).max(200),
+        name: z.string().min(1),
         content: z.string().min(1),
         description: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
-      const result = await db.insert(contractTemplates).values({
-        name: input.name,
-        content: input.content,
-        description: input.description,
-        createdBy: ctx.user!.id,
-      });
-      return { id: Number(result[0].insertId), success: true };
+      const result = await db
+        .insert(contractTemplates)
+        .values({
+          name: input.name,
+          content: input.content,
+          description: input.description,
+          createdBy: ctx.user!.id,
+        })
+        .returning();
+      return { id: result[0].id, success: true };
     }),
 
-  update: contractAdminQuery
+  update: adminQuery
     .input(
       z.object({
         id: z.number(),
-        name: z.string().min(1).max(200).optional(),
-        content: z.string().min(1).optional(),
+        name: z.string().optional(),
+        content: z.string().optional(),
         description: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
       const db = getDb();
       const { id, ...data } = input;
-      await db
-        .update(contractTemplates)
-        .set(data)
-        .where(eq(contractTemplates.id, id));
+      await db.update(contractTemplates).set(data).where(eq(contractTemplates.id, id));
       return { success: true };
     }),
 
-  delete: contractAdminQuery
+  delete: adminQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
-      await db
-        .delete(contractTemplates)
-        .where(eq(contractTemplates.id, input.id));
+      await db.delete(contractTemplates).where(eq(contractTemplates.id, input.id));
       return { success: true };
     }),
 });
