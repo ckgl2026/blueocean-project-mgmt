@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import {
   FileText, Users, CheckCircle, Clock, RotateCcw,
   BarChart3, TrendingUp, AlertTriangle, LogIn,
+  CloudOff,
 } from "lucide-react";
+import DataSync from "@/components/DataSync";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 
@@ -96,6 +98,21 @@ export default function Home() {
                 {isProjectManager && <NavButton to="/rework" icon={RotateCcw} label="返工台账" colorClass="text-red-600" />}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-orange-200 bg-orange-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm sm:text-base flex items-center gap-2 text-orange-800">
+              <CloudOff className="w-4 h-4 sm:w-5 sm:h-5" />
+              数据同步（多电脑共享）
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs sm:text-sm text-orange-700 mb-3">
+              当前为本地存储模式。要在不同电脑间共享数据，请在一台电脑上导出数据，在另一台电脑上导入。
+            </p>
+            <DataSync />
           </CardContent>
         </Card>
 
