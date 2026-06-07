@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { trpc } from "@/providers/trpc";
+import { me, logout as doLogout } from "@/lib/dataService";
 
 export type AuthUser = {
   id: number;
@@ -12,54 +12,17 @@ export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const meQuery = trpc.localAuth.me.useQuery(undefined, {
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
-
   useEffect(() => {
-    if (meQuery.isLoading) {
-      setIsLoading(true);
-    } else if (meQuery.data) {
-      setUser(meQuery.data as AuthUser);
-      setIsLoading(false);
-    } else {
-      setUser(null);
-      setIsLoading(false);
-    }
-  }, [meQuery.data, meQuery.isLoading]);
-
-  const loginMutation = trpc.localAuth.login.useMutation({
-    onSuccess: (data) => {
-      localStorage.setItem("blueocean_token", data.token);
-      setUser(data.user as AuthUser);
-    },
-  });
-
-  const logoutMutation = trpc.localAuth.logout.useMutation({
-    onSuccess: () => {
-      localStorage.removeItem("blueocean_token");
-      setUser(null);
-      window.location.reload();
-    },
-    onError: () => {
-      // Even if server logout fails, clear local state
-      localStorage.removeItem("blueocean_token");
-      setUser(null);
-      window.location.reload();
-    },
-  });
-
-  const login = useCallback(
-    (username: string, password: string) => {
-      return loginMutation.mutateAsync({ username, password });
-    },
-    [loginMutation]
-  );
+    const session = me();
+    setUser(session ? { id: session.userId, username: session.username, name: session.name, role: session.role } : null);
+    setIsLoading(false);
+  }, []);
 
   const logout = useCallback(() => {
-    logoutMutation.mutate();
-  }, [logoutMutation]);
+    doLogout();
+    setUser(null);
+    window.location.reload();
+  }, []);
 
   const isAuthenticated = !!user;
   const isSuperAdmin = user?.role === "super_admin";
@@ -74,9 +37,8 @@ export function useAuth() {
       isSuperAdmin,
       isContractAdmin,
       isProjectManager,
-      login,
       logout,
     }),
-    [user, isAuthenticated, isLoading, isSuperAdmin, isContractAdmin, isProjectManager, login, logout]
+    [user, isAuthenticated, isLoading, isSuperAdmin, isContractAdmin, isProjectManager, logout]
   );
 }

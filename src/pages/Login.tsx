@@ -1,20 +1,27 @@
 import { useState, useRef } from "react";
-import { useAuth } from "@/hooks/useAuth";
-import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { trpc } from "@/providers/trpc";
 
 export default function Login() {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const usernameRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const { login } = useAuth();
-  const navigate = useNavigate();
+  const loginMutation = trpc.localAuth.login.useMutation({
+    onSuccess: (data) => {
+      localStorage.setItem("blueocean_token", data.token);
+      window.location.href = "/#/";
+    },
+    onError: (err) => {
+      setError(err.message);
+      setIsSubmitting(false);
+    },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,13 +37,7 @@ export default function Login() {
     }
 
     setIsSubmitting(true);
-    try {
-      await login(username, password);
-      navigate("/");
-    } catch (err: unknown) {
-      setError((err as Error).message || "登录失败");
-      setIsSubmitting(false);
-    }
+    loginMutation.mutate({ username, password });
   };
 
   return (
@@ -65,30 +66,13 @@ export default function Login() {
             )}
             <div className="space-y-2">
               <Label htmlFor="username">用户名</Label>
-              <Input
-                id="username"
-                ref={usernameRef}
-                placeholder="请输入用户名"
-                className="h-11"
-                autoComplete="username"
-              />
+              <Input id="username" ref={usernameRef} placeholder="请输入用户名" className="h-11" autoComplete="username" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">密码（初始为空格）</Label>
-              <Input
-                id="password"
-                ref={passwordRef}
-                type="password"
-                placeholder="密码为空格，请直接按空格键"
-                className="h-11"
-                autoComplete="current-password"
-              />
+              <Input id="password" ref={passwordRef} type="password" placeholder="密码为空格，请直接按空格键" className="h-11" autoComplete="current-password" />
             </div>
-            <Button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full h-11 bg-[#1e3a5f] hover:bg-[#2a4a6f] text-white disabled:opacity-50"
-            >
+            <Button type="submit" disabled={isSubmitting} className="w-full h-11 bg-[#1e3a5f] hover:bg-[#2a4a6f] text-white disabled:opacity-50">
               {isSubmitting ? "登录中..." : "登录"}
             </Button>
             <div className="text-center text-xs text-gray-400 pt-2">

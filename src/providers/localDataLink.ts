@@ -1,106 +1,220 @@
-// tRPC link that serves data from localStorage when backend is unavailable
 import type { TRPCLink } from "@trpc/client";
 import { TRPCClientError } from "@trpc/client";
 import { observable } from "@trpc/server/observable";
 import * as store from "@/lib/store";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+
+// ─── Supabase sync helpers ───────────────────────────────
+
+const TABLE_MAP: Record<string, string> = {
+  users: "users",
+  projects: "projects",
+  contract_templates: "contract_templates",
+  contracts: "contracts",
+  project_budgets: "project_budgets",
+  quality_records: "quality_records",
+  idle_logs: "idle_logs",
+  rework_ledgers: "rework_ledgers",
+};
+
+async function sbSyncCreate(table: string, data: any) {
+  if (!isSupabaseConfigured()) return;
+  const dbTable = TABLE_MAP[table];
+  if (!dbTable) return;
+  await supabase.from(dbTable).insert(data);
+}
+
+async function sbSyncUpdate(table: string, id: number, data: any) {
+  if (!isSupabaseConfigured()) return;
+  const dbTable = TABLE_MAP[table];
+  if (!dbTable) return;
+  await supabase.from(dbTable).update(data).eq("id", id);
+}
+
+async function sbSyncDelete(table: string, id: number) {
+  if (!isSupabaseConfigured()) return;
+  const dbTable = TABLE_MAP[table];
+  if (!dbTable) return;
+  await supabase.from(dbTable).delete().eq("id", id);
+}
+
+async function sbSyncLoad(table: string) {
+  if (!isSupabaseConfigured()) return null;
+  const dbTable = TABLE_MAP[table];
+  if (!dbTable) return null;
+  const { data, error } = await supabase.from(dbTable).select("*").order("id");
+  if (error || !data || data.length === 0) return null;
+  return data;
+}
+
+// ─── Load Supabase data into localStorage on first access ─
+
+let _synced = false;
+async function ensureSynced() {
+  if (_synced || !isSupabaseConfigured()) return;
+  _synced = true;
+  const tables = [
+    { key: "bo_users", table: "users" },
+    { key: "bo_projects", table: "projects" },
+    { key: "bo_templates", table: "contract_templates" },
+    { key: "bo_contracts", table: "contracts" },
+    { key: "bo_budgets", table: "project_budgets" },
+    { key: "bo_quality", table: "quality_records" },
+    { key: "bo_idleLogs", table: "idle_logs" },
+    { key: "bo_reworks", table: "rework_ledgers" },
+  ];
+  for (const t of tables) {
+    const existing = localStorage.getItem(t.key);
+    if (!existing || existing === "[]") {
+      const remote = await sbSyncLoad(t.table);
+      if (remote && remote.length > 0) {
+        localStorage.setItem(t.key, JSON.stringify(remote));
+      }
+    }
+  }
+}
+
+// ─── Path handlers ───────────────────────────────────────
 
 const pathMap: Record<string, (input: any) => any> = {
   // Auth
-  "localAuth.login": (input) => {
+  "localAuth.login": async (input: { username: string; password: string }) => {
+    await ensureSynced();
+    if (isSupabaseConfigured()) {
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("username", input.username)
+        .single();
+      if (error || !data) throw new Error("用户名或密码错误");
+      if (data.password !== store.simpleHash(input.password)) throw new Error("用户名或密码错误");
+      if (data.status !== "active") throw new Error("账号已停用");
+      const session = { userId: data.id, username: data.username, name: data.name, role: data.role };
+      localStorage.setItem("bo_session", JSON.stringify(session));
+      return { token: "local-token-" + Date.now(), user: { id: data.id, username: data.username, name: data.name, role: data.role } };
+    }
     const session = store.login(input.username, input.password);
-    return {
-      token: "local-token-" + Date.now(),
-      user: {
-        id: session.userId,
-        username: session.username,
-        name: session.name,
-        role: session.role,
-      },
-    };
+    return { token: "local-token-" + Date.now(), user: { id: session.userId, username: session.username, name: session.name, role: session.role } };
   },
-  "localAuth.me": () => {
-    const session = store.me();
-    if (!session) return null;
-    return {
-      id: session.userId,
-      username: session.username,
-      name: session.name,
-      role: session.role,
-    };
+  "localAuth.me": async () => {
+    await ensureSynced();
+    const sessionStr = localStorage.getItem("bo_session");
+    if (!sessionStr) return null;
+    try {
+      const session = JSON.parse(sessionStr);
+      return { id: session.userId, username: session.username, name: session.name, role: session.role };
+    } catch { return null; }
   },
   "localAuth.logout": () => {
     store.logout();
     return { success: true };
   },
-  "localAuth.changePassword": (input) => {
+  "localAuth.changePassword": async (input: { oldPassword: string; newPassword: string }) => {
     const session = store.me();
     if (!session) throw new Error("未登录");
     const users = store.getUsers();
     const user = users.find((u: any) => u.id === session.userId);
     if (!user) throw new Error("用户不存在");
     if (user.password !== store.simpleHash(input.oldPassword)) throw new Error("原密码错误");
-    store.updateUser(user.id, { password: store.simpleHash(input.newPassword) });
+    const newHash = store.simpleHash(input.newPassword);
+    store.updateUser(user.id, { password: newHash });
+    await sbSyncUpdate("users", user.id, { password: newHash });
     return { success: true };
   },
 
   // Users
-  "user.list": () => store.getUsers(),
-  "user.create": (input) => store.createUser(input),
-  "user.update": (input) => {
-    const { id, ...data } = input;
-    return store.updateUser(id, data);
+  "user.list": async () => { await ensureSynced(); return store.getUsers(); },
+  "user.create": async (input: any) => {
+    const hashedPw = store.simpleHash(input.password || " ");
+    const result = store.createUser({ ...input, password: hashedPw });
+    await sbSyncCreate("users", { ...input, password: hashedPw, id: result.id, created_at: result.createdAt });
+    return { id: result.id, success: true };
   },
-  "user.delete": (input) => {
+  "user.update": async (input: any) => {
+    const { id, ...data } = input;
+    if (data.password) data.password = store.simpleHash(data.password);
+    store.updateUser(id, data);
+    await sbSyncUpdate("users", id, data);
+    return { success: true };
+  },
+  "user.delete": async (input: number) => {
     store.deleteUser(input);
+    await sbSyncDelete("users", input);
     return { success: true };
   },
 
   // Projects
-  "project.list": () => store.getProjects(),
-  "project.create": (input) => store.createProject(input),
-  "project.update": (input) => {
-    const { id, ...data } = input;
-    return store.updateProject(id, data);
+  "project.list": async () => { await ensureSynced(); return store.getProjects(); },
+  "project.create": async (input: any) => {
+    const result = store.createProject(input);
+    await sbSyncCreate("projects", { ...input, id: result.id, created_at: result.createdAt });
+    return { id: result.id, success: true };
   },
-  "project.delete": (input) => {
+  "project.update": async (input: any) => {
+    const { id, ...data } = input;
+    store.updateProject(id, data);
+    await sbSyncUpdate("projects", id, data);
+    return { success: true };
+  },
+  "project.delete": async (input: number) => {
     store.deleteProject(input);
+    await sbSyncDelete("projects", input);
     return { success: true };
   },
 
   // Contract Templates
-  "contractTemplate.list": () => store.getTemplates(),
-  "contractTemplate.create": (input) => {
+  "contractTemplate.list": async () => { await ensureSynced(); return store.getTemplates(); },
+  "contractTemplate.create": async (input: any) => {
     const session = store.me();
-    return store.createTemplate(input, session?.userId || 1);
+    const result = store.createTemplate(input, session?.userId || 1);
+    await sbSyncCreate("contract_templates", { ...input, created_by: session?.userId || 1, id: result.id, created_at: result.createdAt });
+    return { id: result.id, success: true };
   },
-  "contractTemplate.update": (input) => {
+  "contractTemplate.update": async (input: any) => {
     const { id, ...data } = input;
-    return store.updateTemplate(id, data);
+    store.updateTemplate(id, data);
+    await sbSyncUpdate("contract_templates", id, data);
+    return { success: true };
   },
-  "contractTemplate.delete": (input) => {
+  "contractTemplate.delete": async (input: number) => {
     store.deleteTemplate(input);
+    await sbSyncDelete("contract_templates", input);
     return { success: true };
   },
 
   // Contracts
-  "contract.list": () => store.getContracts(),
-  "contract.getById": (input) => store.getContractById(input),
-  "contract.create": (input) => {
+  "contract.list": async (input?: { search?: string; status?: string }) => {
+    await ensureSynced();
+    let list = store.getContracts();
+    if (input?.status) list = list.filter((c: any) => c.status === input.status);
+    return list;
+  },
+  "contract.getById": async (input: number) => {
+    await ensureSynced();
+    return store.getContractById(input);
+  },
+  "contract.create": async (input: any) => {
     const session = store.me();
-    return store.createContract(input, session?.userId || 1);
+    const result = store.createContract(input, session?.userId || 1);
+    await sbSyncCreate("contracts", { ...result, created_by: session?.userId || 1 });
+    return { id: result.id, contractNo: result.contractNo, success: true };
   },
-  "contract.update": (input) => {
+  "contract.update": async (input: any) => {
     const { id, ...data } = input;
-    return store.updateContract(id, data);
+    store.updateContract(id, data);
+    await sbSyncUpdate("contracts", id, data);
+    return { success: true };
   },
-  "contract.delete": (input) => {
+  "contract.delete": async (input: number) => {
     store.deleteContract(input);
+    await sbSyncDelete("contracts", input);
     return { success: true };
   },
 
   // Budgets
-  "budget.list": () => store.getBudgets(),
-  "budget.getById": (input) => {
+  "budget.list": async () => { await ensureSynced(); return store.getBudgets(); },
+  "budget.getById": async (input: number) => {
+    await ensureSynced();
     const budget = store.getBudgetById(input);
     if (budget) {
       const contracts = store.getContracts();
@@ -109,60 +223,80 @@ const pathMap: Record<string, (input: any) => any> = {
     }
     return budget;
   },
-  "budget.create": (input) => {
+  "budget.create": async (input: any) => {
     const session = store.me();
-    return store.createBudget(input, session?.userId || 1);
+    const result = store.createBudget(input, session?.userId || 1);
+    await sbSyncCreate("project_budgets", { ...result, created_by: session?.userId || 1 });
+    return { id: result.id, budgetNo: result.budgetNo, success: true };
   },
-  "budget.delete": (input) => {
+  "budget.delete": async (input: number) => {
     store.deleteBudget(input);
+    await sbSyncDelete("project_budgets", input);
     return { success: true };
   },
 
   // Quality Records
-  "quality.list": () => store.getQualityRecords(),
-  "quality.create": (input) => {
+  "quality.list": async () => { await ensureSynced(); return store.getQualityRecords(); },
+  "quality.create": async (input: any) => {
     const session = store.me();
-    return store.createQualityRecord(input, session?.userId || 1);
+    const result = store.createQualityRecord(input, session?.userId || 1);
+    await sbSyncCreate("quality_records", { ...result, created_by: session?.userId || 1 });
+    return { id: result.id, success: true };
   },
-  "quality.update": (input) => {
+  "quality.update": async (input: any) => {
     const { id, ...data } = input;
-    return store.updateQualityRecord(id, data);
+    store.updateQualityRecord(id, data);
+    await sbSyncUpdate("quality_records", id, data);
+    return { success: true };
   },
-  "quality.delete": (input) => {
+  "quality.delete": async (input: number) => {
     store.deleteQualityRecord(input);
+    await sbSyncDelete("quality_records", input);
     return { success: true };
   },
 
   // Idle Logs
-  "idleLog.list": () => store.getIdleLogs(),
-  "idleLog.create": (input) => {
+  "idleLog.list": async () => { await ensureSynced(); return store.getIdleLogs(); },
+  "idleLog.create": async (input: any) => {
     const session = store.me();
-    return store.createIdleLog(input, session?.userId || 1);
+    const result = store.createIdleLog(input, session?.userId || 1);
+    await sbSyncCreate("idle_logs", { ...result, created_by: session?.userId || 1 });
+    return { id: result.id, success: true };
   },
-  "idleLog.update": (input) => {
+  "idleLog.update": async (input: any) => {
     const { id, ...data } = input;
-    return store.updateIdleLog(id, data);
+    store.updateIdleLog(id, data);
+    await sbSyncUpdate("idle_logs", id, data);
+    return { success: true };
   },
-  "idleLog.delete": (input) => {
+  "idleLog.delete": async (input: number) => {
     store.deleteIdleLog(input);
+    await sbSyncDelete("idle_logs", input);
     return { success: true };
   },
 
   // Rework Ledgers
-  "rework.list": () => store.getReworkLedgers(),
-  "rework.create": (input) => {
+  "rework.list": async () => { await ensureSynced(); return store.getReworkLedgers(); },
+  "rework.create": async (input: any) => {
     const session = store.me();
-    return store.createReworkLedger(input, session?.userId || 1);
+    const result = store.createReworkLedger(input, session?.userId || 1);
+    await sbSyncCreate("rework_ledgers", { ...result, created_by: session?.userId || 1 });
+    return { id: result.id, success: true };
   },
-  "rework.update": (input) => {
+  "rework.update": async (input: any) => {
     const { id, ...data } = input;
-    return store.updateReworkLedger(id, data);
+    store.updateReworkLedger(id, data);
+    await sbSyncUpdate("rework_ledgers", id, data);
+    return { success: true };
   },
-  "rework.delete": (input) => {
+  "rework.delete": async (input: number) => {
     store.deleteReworkLedger(input);
+    await sbSyncDelete("rework_ledgers", input);
     return { success: true };
   },
 };
+
+// ─── TRPC Link ───────────────────────────────────────────
 
 export const localDataLink: TRPCLink<any> =
   () =>
