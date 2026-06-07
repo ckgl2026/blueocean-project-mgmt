@@ -4,7 +4,7 @@ import { observable } from "@trpc/server/observable";
 import * as store from "@/lib/store";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
-// ─── Supabase sync helpers ───────────────────────────────
+// ─── Supabase helpers ────────────────────────────────────
 
 const TABLE_MAP: Record<string, string> = {
   users: "users",
@@ -17,60 +17,57 @@ const TABLE_MAP: Record<string, string> = {
   rework_ledgers: "rework_ledgers",
 };
 
-async function sbSyncCreate(table: string, data: any) {
-  if (!isSupabaseConfigured()) return;
+async function sbList(table: string) {
   const dbTable = TABLE_MAP[table];
-  if (!dbTable) return;
-  await supabase.from(dbTable).insert(data);
+  if (!dbTable) return [];
+  const { data, error } = await supabase.from(dbTable).select("*").order("id");
+  if (error) return [];
+  return data || [];
 }
 
-async function sbSyncUpdate(table: string, id: number, data: any) {
-  if (!isSupabaseConfigured()) return;
+async function sbCreate(table: string, values: any) {
   const dbTable = TABLE_MAP[table];
-  if (!dbTable) return;
-  await supabase.from(dbTable).update(data).eq("id", id);
+  if (!dbTable) return null;
+  const { data, error } = await supabase.from(dbTable).insert(values).select().single();
+  if (error) throw new Error(error.message);
+  return data;
 }
 
-async function sbSyncDelete(table: string, id: number) {
-  if (!isSupabaseConfigured()) return;
+async function sbUpdate(table: string, id: number, values: any) {
+  const dbTable = TABLE_MAP[table];
+  if (!dbTable) return;
+  await supabase.from(dbTable).update(values).eq("id", id);
+}
+
+async function sbDelete(table: string, id: number) {
   const dbTable = TABLE_MAP[table];
   if (!dbTable) return;
   await supabase.from(dbTable).delete().eq("id", id);
 }
 
-async function sbSyncLoad(table: string) {
-  if (!isSupabaseConfigured()) return null;
-  const dbTable = TABLE_MAP[table];
-  if (!dbTable) return null;
-  const { data, error } = await supabase.from(dbTable).select("*").order("id");
-  if (error || !data || data.length === 0) return null;
-  return data;
+// ─── Two-way sync: read from Supabase, write to Supabase ──
+
+async function syncFromRemote(key: string, table: string) {
+  if (!isSupabaseConfigured()) return;
+  const remote = await sbList(table);
+  if (remote && remote.length > 0) {
+    localStorage.setItem(key, JSON.stringify(remote));
+  }
 }
 
-// ─── Load Supabase data into localStorage on every page load ─
-// This ensures data from other devices is always synced
+async function syncCreate(key: string, table: string, values: any) {
+  await sbCreate(table, values);
+  await syncFromRemote(key, table);
+}
 
-let _synced = false;
-async function ensureSynced() {
-  if (_synced || !isSupabaseConfigured()) return;
-  _synced = true;
-  const tables = [
-    { key: "bo_users", table: "users" },
-    { key: "bo_projects", table: "projects" },
-    { key: "bo_templates", table: "contract_templates" },
-    { key: "bo_contracts", table: "contracts" },
-    { key: "bo_budgets", table: "project_budgets" },
-    { key: "bo_quality", table: "quality_records" },
-    { key: "bo_idleLogs", table: "idle_logs" },
-    { key: "bo_reworks", table: "rework_ledgers" },
-  ];
-  for (const t of tables) {
-    // Always pull latest data from Supabase to sync other devices' changes
-    const remote = await sbSyncLoad(t.table);
-    if (remote && remote.length > 0) {
-      localStorage.setItem(t.key, JSON.stringify(remote));
-    }
-  }
+async function syncUpdate(key: string, table: string, id: number, values: any) {
+  await sbUpdate(table, id, values);
+  await syncFromRemote(key, table);
+}
+
+async function syncDelete(key: string, table: string, id: number) {
+  await sbDelete(table, id);
+  await syncFromRemote(key, table);
 }
 
 // ─── Path handlers ───────────────────────────────────────
@@ -78,7 +75,6 @@ async function ensureSynced() {
 const pathMap: Record<string, (input: any) => any> = {
   // Auth
   "localAuth.login": async (input: { username: string; password: string }) => {
-    await ensureSynced();
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from("users")
@@ -96,7 +92,6 @@ const pathMap: Record<string, (input: any) => any> = {
     return { token: "local-token-" + Date.now(), user: { id: session.userId, username: session.username, name: session.name, role: session.role } };
   },
   "localAuth.me": async () => {
-    await ensureSynced();
     const sessionStr = localStorage.getItem("bo_session");
     if (!sessionStr) return null;
     try {
@@ -117,103 +112,141 @@ const pathMap: Record<string, (input: any) => any> = {
     if (user.password !== store.simpleHash(input.oldPassword)) throw new Error("原密码错误");
     const newHash = store.simpleHash(input.newPassword);
     store.updateUser(user.id, { password: newHash });
-    await sbSyncUpdate("users", user.id, { password: newHash });
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_users", "users", user.id, { password: newHash });
+    }
     return { success: true };
   },
 
   // Users
-  "user.list": async () => { await ensureSynced(); return store.getUsers(); },
+  "user.list": async () => {
+    await syncFromRemote("bo_users", "users");
+    return store.getUsers();
+  },
   "user.create": async (input: any) => {
     const hashedPw = store.simpleHash(input.password || " ");
     const result = store.createUser({ ...input, password: hashedPw });
-    await sbSyncCreate("users", { ...input, password: hashedPw, id: result.id, created_at: result.createdAt });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_users", "users", { ...input, password: hashedPw, id: result.id, created_at: result.createdAt });
+    }
     return { id: result.id, success: true };
   },
   "user.update": async (input: any) => {
     const { id, ...data } = input;
     if (data.password) data.password = store.simpleHash(data.password);
     store.updateUser(id, data);
-    await sbSyncUpdate("users", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_users", "users", id, data);
+    }
     return { success: true };
   },
   "user.delete": async (input: number) => {
     store.deleteUser(input);
-    await sbSyncDelete("users", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_users", "users", input);
+    }
     return { success: true };
   },
 
   // Projects
-  "project.list": async () => { await ensureSynced(); return store.getProjects(); },
+  "project.list": async () => {
+    await syncFromRemote("bo_projects", "projects");
+    return store.getProjects();
+  },
   "project.create": async (input: any) => {
     const result = store.createProject(input);
-    await sbSyncCreate("projects", { ...input, id: result.id, created_at: result.createdAt });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_projects", "projects", { ...input, id: result.id, created_at: result.createdAt });
+    }
     return { id: result.id, success: true };
   },
   "project.update": async (input: any) => {
     const { id, ...data } = input;
     store.updateProject(id, data);
-    await sbSyncUpdate("projects", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_projects", "projects", id, data);
+    }
     return { success: true };
   },
   "project.delete": async (input: number) => {
     store.deleteProject(input);
-    await sbSyncDelete("projects", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_projects", "projects", input);
+    }
     return { success: true };
   },
 
   // Contract Templates
-  "contractTemplate.list": async () => { await ensureSynced(); return store.getTemplates(); },
+  "contractTemplate.list": async () => {
+    await syncFromRemote("bo_templates", "contract_templates");
+    return store.getTemplates();
+  },
   "contractTemplate.create": async (input: any) => {
     const session = store.me();
     const result = store.createTemplate(input, session?.userId || 1);
-    await sbSyncCreate("contract_templates", { ...input, created_by: session?.userId || 1, id: result.id, created_at: result.createdAt });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_templates", "contract_templates", { ...input, created_by: session?.userId || 1, id: result.id, created_at: result.createdAt });
+    }
     return { id: result.id, success: true };
   },
   "contractTemplate.update": async (input: any) => {
     const { id, ...data } = input;
     store.updateTemplate(id, data);
-    await sbSyncUpdate("contract_templates", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_templates", "contract_templates", id, data);
+    }
     return { success: true };
   },
   "contractTemplate.delete": async (input: number) => {
     store.deleteTemplate(input);
-    await sbSyncDelete("contract_templates", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_templates", "contract_templates", input);
+    }
     return { success: true };
   },
 
   // Contracts
   "contract.list": async (input?: { search?: string; status?: string }) => {
-    await ensureSynced();
+    await syncFromRemote("bo_contracts", "contracts");
     let list = store.getContracts();
     if (input?.status) list = list.filter((c: any) => c.status === input.status);
     return list;
   },
   "contract.getById": async (input: number) => {
-    await ensureSynced();
+    await syncFromRemote("bo_contracts", "contracts");
     return store.getContractById(input);
   },
   "contract.create": async (input: any) => {
     const session = store.me();
     const result = store.createContract(input, session?.userId || 1);
-    await sbSyncCreate("contracts", { ...result, created_by: session?.userId || 1 });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_contracts", "contracts", { ...result, created_by: session?.userId || 1 });
+    }
     return { id: result.id, contractNo: result.contractNo, success: true };
   },
   "contract.update": async (input: any) => {
     const { id, ...data } = input;
     store.updateContract(id, data);
-    await sbSyncUpdate("contracts", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_contracts", "contracts", id, data);
+    }
     return { success: true };
   },
   "contract.delete": async (input: number) => {
     store.deleteContract(input);
-    await sbSyncDelete("contracts", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_contracts", "contracts", input);
+    }
     return { success: true };
   },
 
   // Budgets
-  "budget.list": async () => { await ensureSynced(); return store.getBudgets(); },
+  "budget.list": async () => {
+    await syncFromRemote("bo_budgets", "project_budgets");
+    return store.getBudgets();
+  },
   "budget.getById": async (input: number) => {
-    await ensureSynced();
+    await syncFromRemote("bo_budgets", "project_budgets");
     const budget = store.getBudgetById(input);
     if (budget) {
       const contracts = store.getContracts();
@@ -225,72 +258,103 @@ const pathMap: Record<string, (input: any) => any> = {
   "budget.create": async (input: any) => {
     const session = store.me();
     const result = store.createBudget(input, session?.userId || 1);
-    await sbSyncCreate("project_budgets", { ...result, created_by: session?.userId || 1 });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_budgets", "project_budgets", { ...result, created_by: session?.userId || 1 });
+    }
     return { id: result.id, budgetNo: result.budgetNo, success: true };
   },
   "budget.delete": async (input: number) => {
     store.deleteBudget(input);
-    await sbSyncDelete("project_budgets", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_budgets", "project_budgets", input);
+    }
     return { success: true };
   },
 
   // Quality Records
-  "quality.list": async () => { await ensureSynced(); return store.getQualityRecords(); },
+  "quality.list": async () => {
+    await syncFromRemote("bo_quality", "quality_records");
+    return store.getQualityRecords();
+  },
   "quality.create": async (input: any) => {
     const session = store.me();
     const result = store.createQualityRecord(input, session?.userId || 1);
-    await sbSyncCreate("quality_records", { ...result, created_by: session?.userId || 1 });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_quality", "quality_records", { ...result, created_by: session?.userId || 1 });
+    }
     return { id: result.id, success: true };
   },
   "quality.update": async (input: any) => {
     const { id, ...data } = input;
     store.updateQualityRecord(id, data);
-    await sbSyncUpdate("quality_records", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_quality", "quality_records", id, data);
+    }
     return { success: true };
   },
   "quality.delete": async (input: number) => {
     store.deleteQualityRecord(input);
-    await sbSyncDelete("quality_records", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_quality", "quality_records", input);
+    }
     return { success: true };
   },
 
   // Idle Logs
-  "idleLog.list": async () => { await ensureSynced(); return store.getIdleLogs(); },
+  "idleLog.list": async () => {
+    await syncFromRemote("bo_idleLogs", "idle_logs");
+    return store.getIdleLogs();
+  },
   "idleLog.create": async (input: any) => {
     const session = store.me();
     const result = store.createIdleLog(input, session?.userId || 1);
-    await sbSyncCreate("idle_logs", { ...result, created_by: session?.userId || 1 });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_idleLogs", "idle_logs", { ...result, created_by: session?.userId || 1 });
+    }
     return { id: result.id, success: true };
   },
   "idleLog.update": async (input: any) => {
     const { id, ...data } = input;
     store.updateIdleLog(id, data);
-    await sbSyncUpdate("idle_logs", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_idleLogs", "idle_logs", id, data);
+    }
     return { success: true };
   },
   "idleLog.delete": async (input: number) => {
     store.deleteIdleLog(input);
-    await sbSyncDelete("idle_logs", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_idleLogs", "idle_logs", input);
+    }
     return { success: true };
   },
 
   // Rework Ledgers
-  "rework.list": async () => { await ensureSynced(); return store.getReworkLedgers(); },
+  "rework.list": async () => {
+    await syncFromRemote("bo_reworks", "rework_ledgers");
+    return store.getReworkLedgers();
+  },
   "rework.create": async (input: any) => {
     const session = store.me();
     const result = store.createReworkLedger(input, session?.userId || 1);
-    await sbSyncCreate("rework_ledgers", { ...result, created_by: session?.userId || 1 });
+    if (isSupabaseConfigured()) {
+      await syncCreate("bo_reworks", "rework_ledgers", { ...result, created_by: session?.userId || 1 });
+    }
     return { id: result.id, success: true };
   },
   "rework.update": async (input: any) => {
     const { id, ...data } = input;
     store.updateReworkLedger(id, data);
-    await sbSyncUpdate("rework_ledgers", id, data);
+    if (isSupabaseConfigured()) {
+      await syncUpdate("bo_reworks", "rework_ledgers", id, data);
+    }
     return { success: true };
   },
   "rework.delete": async (input: number) => {
     store.deleteReworkLedger(input);
-    await sbSyncDelete("rework_ledgers", input);
+    if (isSupabaseConfigured()) {
+      await syncDelete("bo_reworks", "rework_ledgers", input);
+    }
     return { success: true };
   },
 };
