@@ -47,7 +47,8 @@ async function sbSyncLoad(table: string) {
   return data;
 }
 
-// ─── Load Supabase data into localStorage on first access ─
+// ─── Load Supabase data into localStorage on every page load ─
+// This ensures data from other devices is always synced
 
 let _synced = false;
 async function ensureSynced() {
@@ -64,12 +65,10 @@ async function ensureSynced() {
     { key: "bo_reworks", table: "rework_ledgers" },
   ];
   for (const t of tables) {
-    const existing = localStorage.getItem(t.key);
-    if (!existing || existing === "[]") {
-      const remote = await sbSyncLoad(t.table);
-      if (remote && remote.length > 0) {
-        localStorage.setItem(t.key, JSON.stringify(remote));
-      }
+    // Always pull latest data from Supabase to sync other devices' changes
+    const remote = await sbSyncLoad(t.table);
+    if (remote && remote.length > 0) {
+      localStorage.setItem(t.key, JSON.stringify(remote));
     }
   }
 }
