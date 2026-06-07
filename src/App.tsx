@@ -35,3 +35,6 @@ export default function App() {
     </>
   );
 }
+// v1780817340
+// force rebuild 1780817395
+export const VERSION = 'v2-' + Date.now();
